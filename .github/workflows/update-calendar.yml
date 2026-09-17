@@ -10,6 +10,7 @@ on:
     paths:
       - "generate_calendar.py"
       - "enhance_earnings.py"
+      - "enhance_catalysts.py"
       - "requirements.txt"
       - ".github/workflows/update-calendar.yml"
 
@@ -32,6 +33,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python generate_calendar.py
       - run: python enhance_earnings.py
+      - run: python enhance_catalysts.py
       - name: 提交更新后的日历
         run: |
           if git diff --quiet -- stocks.ics; then
