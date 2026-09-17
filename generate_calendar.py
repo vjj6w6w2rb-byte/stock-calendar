@@ -143,9 +143,11 @@ def parse_fomc() -> list[Event]:
     heading = next((h for h in soup.find_all(["h3", "h4"]) if "FOMC Meetings" in h.get_text() and str(TODAY.year) in h.get_text()), None)
     if not heading:
         raise ValueError("Current-year FOMC section not found")
+    # Meeting rows are siblings of the panel heading. Do not recurse through the
+    # whole document (which would duplicate descendants from several rows).
     section = []
-    for sibling in heading.find_all_next():
-        if sibling.name in {"h3", "h4"} and sibling is not heading:
+    for sibling in heading.parent.find_next_siblings():
+        if "panel-heading" in (sibling.get("class") or []):
             break
         section.append(sibling.get_text(" ", strip=True))
     text = " ".join(section)
