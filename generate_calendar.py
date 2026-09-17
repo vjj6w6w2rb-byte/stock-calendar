@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build stocks.ics from primary US-government and issuer sources.
+"""生成美股、美国宏观、美联储、期权到期与美股休市订阅日历。
 
-All timed events use America/New_York.  Existing events from a failed source are
-kept, so a transient outage cannot empty a subscriber's calendar.
+定时事件最终统一转换为北京时间 Asia/Shanghai；期权到期日与休市日使用全天事件。
+如果某个数据源暂时失败，则保留该来源上一次的有效事件，避免订阅日历突然清空。
 """
 from __future__ import annotations
 
@@ -17,13 +17,15 @@ from zoneinfo import ZoneInfo
 import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
-from icalendar import Calendar, Event, vText
+from dateutil.easter import easter
+from icalendar import Calendar, Event, Timezone
 
 OUTPUT = Path("stocks.ics")
 NY = ZoneInfo("America/New_York")
-TODAY = datetime.now(NY).date()
+BJ = ZoneInfo("Asia/Shanghai")
+TODAY = datetime.now(BJ).date()
 HORIZON = TODAY + timedelta(days=550)
-OPTION_HORIZON = TODAY + timedelta(days=60)  # refreshed daily; keeps API responses bounded
+OPTION_HORIZON = TODAY + timedelta(days=60)
 TIMEOUT = 25
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -31,8 +33,6 @@ HEADERS = {
 }
 TICKERS = ("CRCL", "MSTR", "TSLA", "POET", "OKLO")
 
-# Official investor-relations pages.  A page can yield no event; this is safer
-# than guessing a date from an earnings estimate or a press rumor.
 COMPANY_EVENT_PAGES = {
     "CRCL": "https://investor.circle.com/news-events/events-and-presentations",
     "MSTR": "https://www.strategy.com/investor-relations/events-and-presentations",
@@ -42,15 +42,15 @@ COMPANY_EVENT_PAGES = {
 }
 
 MACRO_KEYWORDS = {
-    "consumer price index": ("🔴【CPI】美国 CPI", "CPI / Core CPI"),
-    "producer price index": ("🔴【PPI】美国 PPI", "PPI / Core PPI"),
-    "employment situation": ("🟠【NFP】美国非农就业数据", "Nonfarm Payrolls / Unemployment Rate"),
-    "employment cost index": ("🟠【ECI】美国 Employment Cost Index", "Employment Cost Index"),
-    "personal income and outlays": ("🔴【PCE】美国 PCE", "PCE / Core PCE"),
-    "gross domestic product": ("🔴【GDP】美国 GDP", "GDP"),
-    "gdp (": ("🔴【GDP】美国 GDP", "GDP"),
-    "advance estimate": ("🔴【GDP】美国 GDP", "GDP"),
-    "retail sales": ("🟠【零售】美国 Retail Sales", "Retail Sales"),
+    "consumer price index": ("美国消费者价格指数", "消费者价格指数及核心消费者价格指数"),
+    "producer price index": ("美国生产者价格指数", "生产者价格指数及核心生产者价格指数"),
+    "employment situation": ("美国非农就业数据", "非农就业、失业率等就业数据"),
+    "employment cost index": ("美国就业成本指数", "就业成本指数"),
+    "personal income and outlays": ("美国个人消费支出物价指数", "个人消费支出物价指数及核心个人消费支出物价指数"),
+    "gross domestic product": ("美国国内生产总值", "国内生产总值"),
+    "gdp (": ("美国国内生产总值", "国内生产总值"),
+    "advance estimate": ("美国国内生产总值", "国内生产总值"),
+    "retail sales": ("美国零售销售", "零售销售"),
 }
 
 
@@ -59,12 +59,26 @@ def stable_uid(source: str, identity: str) -> str:
     return f"{source.lower()}-{digest}@stock-calendar"
 
 
-def event(source: str, identity: str, summary: str, when: datetime, description: str, end: datetime | None = None) -> Event:
+def timed_event(source: str, identity: str, summary: str, when: datetime, description: str,
+                end: datetime | None = None) -> Event:
     item = Event()
     item.add("uid", stable_uid(source, identity))
-    item.add("dtstamp", datetime.now(NY))
-    item.add("dtstart", when)
-    item.add("dtend", end or when + timedelta(minutes=30))
+    item.add("dtstamp", datetime.now(BJ))
+    local = when.astimezone(BJ)
+    item.add("dtstart", local)
+    item.add("dtend", (end.astimezone(BJ) if end else local + timedelta(minutes=30)))
+    item.add("summary", summary)
+    item.add("description", description)
+    item.add("x-source", source)
+    return item
+
+
+def allday_event(source: str, identity: str, summary: str, day: date, description: str) -> Event:
+    item = Event()
+    item.add("uid", stable_uid(source, identity))
+    item.add("dtstamp", datetime.now(BJ))
+    item.add("dtstart", day)
+    item.add("dtend", day + timedelta(days=1))
     item.add("summary", summary)
     item.add("description", description)
     item.add("x-source", source)
@@ -77,14 +91,15 @@ def get(url: str) -> requests.Response:
     return response
 
 
-def future(when: datetime) -> bool:
-    return TODAY - timedelta(days=7) <= when.date() <= HORIZON
+def future_dt(when: datetime) -> bool:
+    return TODAY - timedelta(days=7) <= when.astimezone(BJ).date() <= HORIZON
 
 
 def parse_bls() -> list[Event]:
     source = "BLS"
-    incoming = Calendar.from_ical(get("https://www.bls.gov/schedule/news_release/bls.ics").content)
-    result = []
+    url = "https://www.bls.gov/schedule/news_release/bls.ics"
+    incoming = Calendar.from_ical(get(url).content)
+    result: list[Event] = []
     for component in incoming.walk("VEVENT"):
         raw_summary = str(component.get("summary", ""))
         lowered = raw_summary.lower()
@@ -98,21 +113,19 @@ def parse_bls() -> list[Event]:
             dtstart = dtstart.replace(tzinfo=NY)
         else:
             dtstart = dtstart.astimezone(NY)
-        if future(dtstart):
+        if future_dt(dtstart):
             title, label = match
-            result.append(event(source, f"{raw_summary}|{dtstart.isoformat()}", title, dtstart,
-                                f"{label}. Official BLS release calendar.\nSource: https://www.bls.gov/schedule/news_release/bls.ics"))
+            result.append(timed_event(source, f"{raw_summary}|{dtstart.isoformat()}", title, dtstart,
+                                      f"{label}\n官方来源：美国劳工统计局 BLS\n官方网址：{url}"))
     return result
 
 
 def parse_schedule_rows(url: str, source: str) -> list[Event]:
     soup = BeautifulSoup(get(url).text, "html.parser")
     page_text = soup.get_text(" ", strip=True)
-    # BEA's schedule heading supplies the year once; individual rows often omit it.
     year_match = re.search(r"\bYear\s+(20\d{2})\b", page_text, re.I) or re.search(r"\b(20\d{2})\b", page_text)
     schedule_year = int(year_match.group(1)) if year_match else TODAY.year
-    result = []
-    # Official pages present their release date, time and name in table rows.
+    result: list[Event] = []
     for row in soup.select("tr"):
         cells = [c.get_text(" ", strip=True) for c in row.select("th, td")]
         text = " | ".join(cells)
@@ -130,64 +143,57 @@ def parse_schedule_rows(url: str, source: str) -> list[Event]:
             when = date_parser.parse(f"{date_text} {time_text}").replace(tzinfo=NY)
         except (ValueError, OverflowError):
             continue
-        if future(when):
+        if future_dt(when):
             title, label = match
-            result.append(event(source, f"{text}|{when.isoformat()}", title, when,
-                                f"{label}. Official {source} release schedule.\nSource: {url}"))
+            org = "美国经济分析局 BEA" if source == "BEA" else "美国人口普查局 Census"
+            result.append(timed_event(source, f"{text}|{when.isoformat()}", title, when,
+                                      f"{label}\n官方来源：{org}\n官方网址：{url}"))
     return result
 
 
 def parse_fomc() -> list[Event]:
     source = "FED"
-    soup = BeautifulSoup(get("https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm").text, "html.parser")
+    url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+    soup = BeautifulSoup(get(url).text, "html.parser")
     heading = next((h for h in soup.find_all(["h3", "h4"]) if "FOMC Meetings" in h.get_text() and str(TODAY.year) in h.get_text()), None)
     if not heading:
-        raise ValueError("Current-year FOMC section not found")
-    # Meeting rows are siblings of the panel heading. Do not recurse through the
-    # whole document (which would duplicate descendants from several rows).
+        raise ValueError("未找到当年 FOMC 日程")
     section = []
     for sibling in heading.parent.find_next_siblings():
         if "panel-heading" in (sibling.get("class") or []):
             break
         section.append(sibling.get_text(" ", strip=True))
     text = " ".join(section)
-    # Month + '27-28*' (also supports a meeting spanning two months in a simple way).
     pattern = re.compile(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})-(\d{1,2})(\*)?", re.I)
-    result = []
+    result: list[Event] = []
     for month, start_day, end_day, sep in pattern.findall(text):
         start = date_parser.parse(f"{month} {start_day} {TODAY.year}").date()
         end_day_i = int(end_day)
         end = start.replace(day=end_day_i) if end_day_i >= start.day else (start.replace(day=1) + timedelta(days=32)).replace(day=end_day_i)
         if end < TODAY - timedelta(days=7) or start > HORIZON:
             continue
-        start_dt = datetime.combine(start, datetime.min.time(), NY)
-        end_dt = datetime.combine(end + timedelta(days=1), datetime.min.time(), NY)
         identity = f"{start.isoformat()}-{end.isoformat()}"
-        result.append(event(source, identity + "-meeting", "🔴【FOMC】美联储两日会议", start_dt,
-                            "Official Federal Reserve FOMC meeting calendar.", end_dt))
+        result.append(allday_event(source, identity + "-meeting", "美联储两日会议", start,
+                                   f"美联储联邦公开市场委员会会议\n官方来源：Federal Reserve\n官方网址：{url}"))
         decision = datetime.combine(end, datetime.strptime("14:00", "%H:%M").time(), NY)
-        result.append(event(source, identity + "-decision", "🔴【FOMC】美联储利率决议", decision,
-                            "Policy statement / rate decision. Official Federal Reserve calendar."))
-        result.append(event(source, identity + "-press", "🔴【FOMC】Powell Press Conference", decision + timedelta(minutes=30),
-                            "Scheduled after the policy decision. Official Federal Reserve calendar."))
+        result.append(timed_event(source, identity + "-decision", "美联储利率决议", decision,
+                                  f"FOMC 政策声明及利率决议\n官方来源：Federal Reserve\n官方网址：{url}"))
+        result.append(timed_event(source, identity + "-press", "鲍威尔新闻发布会", decision + timedelta(minutes=30),
+                                  f"美联储主席新闻发布会\n官方来源：Federal Reserve\n官方网址：{url}"))
         if sep:
-            result.append(event(source, identity + "-sep", "🔴【FOMC】SEP / Dot Plot", decision,
-                                "Summary of Economic Projections (SEP / dot plot). Official Federal Reserve calendar."))
+            result.append(timed_event(source, identity + "-sep", "美联储经济预测与点阵图", decision,
+                                      f"经济预测摘要 SEP 与点阵图\n官方来源：Federal Reserve\n官方网址：{url}"))
     return result
 
 
 def parse_options() -> list[Event]:
-    result = []
+    result: list[Event] = []
     for ticker in TICKERS:
         source = f"NASDAQ-{ticker}"
-        # Ask for a rolling window, not the complete multi-year chain. This both
-        # confirms actual listings and avoids a needlessly large API response.
         url = (f"https://api.nasdaq.com/api/quote/{ticker}/option-chain?assetclass=stocks"
                f"&fromdate={TODAY.isoformat()}&todate={OPTION_HORIZON.isoformat()}")
         payload = get(url).json()
         data = payload.get("data") or {}
-        # The documented endpoint currently exposes one `expirygroup` header per
-        # listed expiry in table rows (rather than an expirationDates array).
         expirations = data.get("expirationDates") or [
             row.get("expirygroup") for row in ((data.get("table") or {}).get("rows") or []) if row.get("expirygroup")
         ]
@@ -199,21 +205,16 @@ def parse_options() -> list[Event]:
                 continue
             if not (TODAY <= expiry <= OPTION_HORIZON):
                 continue
-            # Nasdaq only lists contracts actually offered for this symbol.  The
-            # listed monthly expiry is explicitly labelled when the API provides it.
             monthly = "monthly" in value.lower() or (expiry.weekday() == 4 and 15 <= expiry.day <= 21)
-            kind = "Monthly OpEx" if monthly else "Weekly Expiration"
-            icon = "🔴" if monthly else "🟡"
-            when = datetime.combine(expiry, datetime.strptime("16:00", "%H:%M").time(), NY)
-            result.append(event(source, expiry.isoformat(), f"{icon}【{ticker} 期权】{kind}", when,
-                                f"Actual listed {ticker} option expiration, verified from Nasdaq option-chain availability.\nSource: https://www.nasdaq.com/market-activity/stocks/{ticker.lower()}/option-chain"))
+            kind = "月度期权到期日" if monthly else "周度期权到期日"
+            page = f"https://www.nasdaq.com/market-activity/stocks/{ticker.lower()}/option-chain"
+            result.append(allday_event(source, expiry.isoformat(), f"{ticker} {kind}", expiry,
+                                       f"{ticker} 实际已挂牌期权到期日\n官方来源：Nasdaq 期权链\n官方网址：{page}"))
     return result
 
 
 def parse_company_events() -> list[Event]:
-    result = []
-    # Date-bearing issuer event cards vary across providers. We accept only cards
-    # whose own text contains an explicit full date and an event keyword.
+    result: list[Event] = []
     keywords = re.compile(r"earnings|quarterly results|annual meeting|investor day|conference|presentation|webcast|product", re.I)
     date_re = re.compile(r"(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+20\d{2}", re.I)
     for ticker, url in COMPANY_EVENT_PAGES.items():
@@ -225,17 +226,68 @@ def parse_company_events() -> list[Event]:
             if not match or not keywords.search(text):
                 continue
             try:
-                when = datetime.combine(date_parser.parse(match.group()).date(), datetime.min.time(), NY)
+                day = date_parser.parse(match.group()).date()
             except ValueError:
                 continue
-            if not future(when):
+            if not (TODAY - timedelta(days=7) <= day <= HORIZON):
                 continue
             short = re.sub(r"\s+", " ", text)[:350]
-            if re.search(r"earnings|quarterly results", short, re.I):
-                title = f"🟣【{ticker}】财报"
-            else:
-                title = f"🟣【{ticker}】已确认公司活动"
-            result.append(event(source, f"{short}|{when.date()}", title, when, f"{short}\nOfficial investor relations source: {url}"))
+            title = f"{ticker} 财报" if re.search(r"earnings|quarterly results", short, re.I) else f"{ticker} 已确认公司活动"
+            result.append(allday_event(source, f"{short}|{day}", title, day,
+                                       f"{short}\n官方来源：{ticker} 投资者关系官网\n官方网址：{url}"))
+    return result
+
+
+def nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    d = date(year, month, 1)
+    return d + timedelta(days=(weekday - d.weekday()) % 7 + 7 * (n - 1))
+
+
+def last_weekday(year: int, month: int, weekday: int) -> date:
+    d = date(year + (month == 12), 1 if month == 12 else month + 1, 1) - timedelta(days=1)
+    return d - timedelta(days=(d.weekday() - weekday) % 7)
+
+
+def observed(day: date) -> date:
+    if day.weekday() == 5:
+        return day - timedelta(days=1)
+    if day.weekday() == 6:
+        return day + timedelta(days=1)
+    return day
+
+
+def parse_market_holidays() -> list[Event]:
+    source = "MARKET-HOLIDAY"
+    url = "https://www.nyse.com/markets/hours-calendars"
+    result: list[Event] = []
+    for year in range(TODAY.year, HORIZON.year + 1):
+        holidays = [
+            (observed(date(year, 1, 1)), "元旦"),
+            (nth_weekday(year, 1, 0, 3), "马丁·路德·金纪念日"),
+            (nth_weekday(year, 2, 0, 3), "美国总统日"),
+            (easter(year) - timedelta(days=2), "耶稣受难日"),
+            (last_weekday(year, 5, 0), "阵亡将士纪念日"),
+            (observed(date(year, 6, 19)), "六月节"),
+            (observed(date(year, 7, 4)), "美国独立日"),
+            (nth_weekday(year, 9, 0, 1), "美国劳动节"),
+            (nth_weekday(year, 11, 3, 4), "感恩节"),
+            (observed(date(year, 12, 25)), "圣诞节"),
+        ]
+        for day, name in holidays:
+            if TODAY - timedelta(days=7) <= day <= HORIZON:
+                result.append(allday_event(source, f"closed-{day.isoformat()}", f"美股休市：{name}", day,
+                                           f"纽约证券交易所休市日\n官方来源：NYSE\n官方网址：{url}"))
+        thanksgiving = nth_weekday(year, 11, 3, 4)
+        early_days = [
+            (thanksgiving + timedelta(days=1), "感恩节次日"),
+            (date(year, 12, 24), "平安夜"),
+        ]
+        for day, name in early_days:
+            if day.weekday() < 5 and TODAY - timedelta(days=7) <= day <= HORIZON:
+                close_ny = datetime.combine(day, datetime.strptime("13:00", "%H:%M").time(), NY)
+                close_bj = close_ny.astimezone(BJ)
+                result.append(allday_event(source, f"early-{day.isoformat()}", f"美股提前收市：{name}", day,
+                                           f"美东时间 13:00 提前收市；北京时间 {close_bj:%H:%M}\n官方来源：NYSE\n官方网址：{url}"))
     return result
 
 
@@ -246,6 +298,7 @@ FETCHERS: dict[str, Callable[[], list[Event]]] = {
     "FED": parse_fomc,
     "OPTIONS": parse_options,
     "COMPANY": parse_company_events,
+    "MARKET-HOLIDAY": parse_market_holidays,
 }
 
 
@@ -255,45 +308,53 @@ def old_events() -> list[Event]:
     try:
         return [c for c in Calendar.from_ical(OUTPUT.read_bytes()).walk("VEVENT")]
     except Exception as exc:
-        logging.warning("Cannot parse previous calendar: %s", exc)
+        logging.warning("无法解析上一次日历：%s", exc)
         return []
+
+
+def source_group(item: Event) -> str:
+    source = str(item.get("x-source", ""))
+    if source.startswith("NASDAQ-"):
+        return "OPTIONS"
+    if source.startswith("IR-"):
+        return "COMPANY"
+    return source
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     previous = old_events()
     fresh: list[Event] = []
-    successful_prefixes: set[str] = set()
+    successful: set[str] = set()
     for name, fetcher in FETCHERS.items():
         try:
             events = fetcher()
             fresh.extend(events)
-            successful_prefixes.add(name)
-            logging.info("%s succeeded: %d events", name, len(events))
+            successful.add(name)
+            logging.info("%s 成功：%d 个事件", name, len(events))
         except Exception as exc:
-            logging.warning("%s failed; preserving prior events: %s", name, exc)
-    # Retain only events belonging to sources that failed. A successful source is
-    # authoritative, including when it currently has no matching future events.
-    retained = []
-    for item in previous:
-        source = str(item.get("x-source", ""))
-        group = "OPTIONS" if source.startswith("NASDAQ-") else "COMPANY" if source.startswith("IR-") else source
-        if group not in successful_prefixes:
-            retained.append(item)
+            logging.warning("%s 失败，保留上一次事件：%s", name, exc)
+    retained = [item for item in previous if source_group(item) not in successful]
     all_events = {str(e.get("uid")): e for e in retained + fresh}
+
     calendar = Calendar()
-    calendar.add("prodid", "-//stock-calendar//GitHub Actions//EN")
+    calendar.add("prodid", "-//stock-calendar//GitHub Actions//ZH-CN")
     calendar.add("version", "2.0")
     calendar.add("calscale", "GREGORIAN")
-    calendar.add("x-wr-calname", "US Stocks & Macro Calendar")
-    calendar.add("x-wr-timezone", "America/New_York")
-    # Embed the DST rules, rather than relying only on a TZID lookup on the phone.
-    from icalendar import Timezone
-    calendar.add_component(Timezone.from_tzid("America/New_York"))
-    for item in sorted(all_events.values(), key=lambda e: e.decoded("dtstart")):
+    calendar.add("x-wr-calname", "美股重要事件日历")
+    calendar.add("x-wr-timezone", "Asia/Shanghai")
+    calendar.add_component(Timezone.from_tzid("Asia/Shanghai"))
+
+    def sort_key(e: Event):
+        value = e.decoded("dtstart")
+        if isinstance(value, datetime):
+            return value.astimezone(BJ)
+        return datetime.combine(value, datetime.min.time(), BJ)
+
+    for item in sorted(all_events.values(), key=sort_key):
         calendar.add_component(item)
     OUTPUT.write_bytes(calendar.to_ical())
-    logging.info("Wrote %s with %d events", OUTPUT, len(all_events))
+    logging.info("已生成 %s，共 %d 个事件", OUTPUT, len(all_events))
 
 
 if __name__ == "__main__":
