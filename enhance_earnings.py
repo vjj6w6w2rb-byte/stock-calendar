@@ -94,7 +94,8 @@ def add_timed(cal: Calendar, ticker: str, kind: str, day: date, when: datetime, 
     ev.add("dtstamp", datetime.now(BJ))
     ev.add("dtstart", when.astimezone(BJ))
     ev.add("dtend", when.astimezone(BJ) + timedelta(minutes=45 if kind == "电话会议" else 15))
-    ev.add("summary", f"{ticker} 财报{kind}")
+    title = f"{ticker} 电话会议" if kind == "电话会议" else f"{ticker} 财报发布"
+    ev.add("summary", title)
     ev.add("description", f"北京时间：{when.astimezone(BJ):%Y-%m-%d %H:%M}\n官方来源：{ticker} 投资者关系官网\n官方网址：{source_url}\n原文摘要：{source_text[:500]}")
     ev.add("x-source", f"IR-TIMES-{ticker}")
     cal.add_component(ev)
