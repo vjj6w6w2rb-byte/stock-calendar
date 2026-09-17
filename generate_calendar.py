@@ -178,7 +178,7 @@ def parse_fomc() -> list[Event]:
         decision = datetime.combine(end, datetime.strptime("14:00", "%H:%M").time(), NY)
         result.append(timed_event(source, identity + "-decision", "美联储利率决议", decision,
                                   f"FOMC 政策声明及利率决议\n官方来源：Federal Reserve\n官方网址：{url}"))
-        result.append(timed_event(source, identity + "-press", "鲍威尔新闻发布会", decision + timedelta(minutes=30),
+        result.append(timed_event(source, identity + "-press", "美联储主席新闻发布会", decision + timedelta(minutes=30),
                                   f"美联储主席新闻发布会\n官方来源：Federal Reserve\n官方网址：{url}"))
         if sep:
             result.append(timed_event(source, identity + "-sep", "美联储经济预测与点阵图", decision,
