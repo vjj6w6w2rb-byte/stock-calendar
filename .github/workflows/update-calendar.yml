@@ -1,10 +1,16 @@
-name: Update stock calendar
+name: 更新股票日历
 
 on:
   schedule:
-    - cron: "17 1 * * *"
-    - cron: "17 13 * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "generate_calendar.py"
+      - "requirements.txt"
+      - ".github/workflows/update-calendar.yml"
 
 permissions:
   contents: write
@@ -24,10 +30,10 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python generate_calendar.py
-      - name: Commit updated calendar
+      - name: 提交更新后的日历
         run: |
           if git diff --quiet -- stocks.ics; then
-            echo "Calendar unchanged."
+            echo "日历没有变化。"
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
