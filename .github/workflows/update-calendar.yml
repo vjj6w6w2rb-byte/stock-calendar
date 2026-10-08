@@ -11,6 +11,7 @@ on:
       - "generate_calendar.py"
       - "enhance_earnings.py"
       - "enhance_catalysts.py"
+      - "add_us_midterm.py"
       - "requirements.txt"
       - ".github/workflows/update-calendar.yml"
 
@@ -34,6 +35,7 @@ jobs:
       - run: python generate_calendar.py
       - run: python enhance_earnings.py
       - run: python enhance_catalysts.py
+      - run: python add_us_midterm.py
       - name: 提交更新后的日历
         run: |
           if git diff --quiet -- stocks.ics; then
