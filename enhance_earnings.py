@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""补充财报发布时间与电话会议/业绩说明会时间。
+"""自动补充所有跟踪股票的财报发布与电话会议。
 
-只使用公司官方投资者关系页面及其官方详情页。若官方只写“盘前/盘后”而未给出精确时刻，
-不会伪造一个时间；会保留日期事件，并在说明中标注“具体时间未公布”。
-所有精确时间最终转换为北京时间 Asia/Shanghai。
+规则：
+- 只使用公司官方 Investor Relations / News / Events 页面及其官方详情页。
+- 有精确时间则写入美东时间 America/New_York；只有盘前/盘后则不虚构分钟。
+- 每家公司独立刷新；某家公司本轮抓取失败或未抓到新数据时，保留该公司上一次有效事件。
 """
 from __future__ import annotations
 
@@ -20,44 +21,94 @@ from dateutil import parser as date_parser
 from icalendar import Calendar, Event
 
 OUTPUT = Path("stocks.ics")
-BJ = ZoneInfo("Asia/Shanghai")
-NY = ZoneInfo("America/New_York")
+ET = ZoneInfo("America/New_York")
 CT = ZoneInfo("America/Chicago")
+MT = ZoneInfo("America/Denver")
 PT = ZoneInfo("America/Los_Angeles")
-TODAY = datetime.now(BJ).date()
+TODAY = datetime.now(ET).date()
 HORIZON = TODAY + timedelta(days=550)
 TIMEOUT = 25
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "text/html,*/*"}
 
-IR_PAGES = {
-    "CRCL": "https://investor.circle.com/",
-    "MSTR": "https://www.strategy.com/investor-relations",
-    "TSLA": "https://ir.tesla.com/",
-    "POET": "https://investors.poet-technologies.com/",
-    "OKLO": "https://investors.oklo.com/",
-    "NVDA": "https://investor.nvidia.com/",
-    "MU": "https://investors.micron.com/",
-    "SNDK": "https://investor.sandisk.com/",
-    "ORCL": "https://investor.oracle.com/",
-    "SPCX": "https://ir.spacex.com/",
+# 每只股票都配置多个官方入口，避免单一页面改版后整只股票失效。
+IR_PAGES: dict[str, list[str]] = {
+    "CRCL": [
+        "https://investor.circle.com/",
+        "https://investor.circle.com/news-events/events-and-presentations",
+        "https://investor.circle.com/news/default.aspx",
+    ],
+    "MSTR": [
+        "https://www.strategy.com/investor-relations",
+        "https://www.strategy.com/press",
+    ],
+    "TSLA": [
+        "https://ir.tesla.com/",
+    ],
+    "POET": [
+        "https://investors.poet-technologies.com/",
+        "https://investors.poet-technologies.com/events-and-presentations",
+        "https://investors.poet-technologies.com/news-events",
+    ],
+    "OKLO": [
+        "https://investors.oklo.com/",
+        "https://investors.oklo.com/news-events/events-and-presentations",
+        "https://investors.oklo.com/news-events",
+    ],
+    "NVDA": [
+        "https://investor.nvidia.com/",
+        "https://investor.nvidia.com/events-and-presentations/default.aspx",
+        "https://investor.nvidia.com/news-and-events/default.aspx",
+    ],
+    "MU": [
+        "https://investors.micron.com/",
+        "https://investors.micron.com/events-and-presentations/default.aspx",
+        "https://investors.micron.com/news/press-release/default.aspx",
+    ],
+    "SNDK": [
+        "https://investor.sandisk.com/",
+        "https://investor.sandisk.com/news-events/events",
+        "https://investor.sandisk.com/news-events/news-releases",
+    ],
+    "ORCL": [
+        "https://investor.oracle.com/",
+        "https://investor.oracle.com/investor-news/default.aspx",
+    ],
+    "SPCX": [
+        "https://ir.spacex.com/",
+    ],
 }
 
 DATE_PATTERNS = [
     re.compile(r"(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+20\d{2}", re.I),
     re.compile(r"\b\d{1,2}/\d{1,2}/20\d{2}\b"),
+    re.compile(r"\b20\d{2}-\d{2}-\d{2}\b"),
 ]
 TIME_RE = re.compile(
-    r"\b(\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?|AM|PM))\s*"
-    r"(ET|EST|EDT|Eastern Time|CT|CST|CDT|Central Time|PT|PST|PDT|Pacific Time)\b",
+    r"\b(\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?|AM|PM))\s*"
+    r"(ET|EST|EDT|Eastern Time|CT|CST|CDT|Central Time|MT|MST|MDT|Mountain Time|PT|PST|PDT|Pacific Time)\b",
     re.I,
 )
-CALL_WORDS = re.compile(r"conference call|earnings call|financial call|post earnings analyst call|webcast|webinar|Q&A|question and answer|discuss (?:the )?results|live video|livestream", re.I)
-RELEASE_WORDS = re.compile(r"report(?:s|ed|ing)? .*financial results|release(?:s|d|ing)? .*financial results|announce(?:s|d|ing)? .*financial results|post(?:s|ed|ing)? .*financial results|earnings release|financial results", re.I)
-EARNINGS_LINK_WORDS = re.compile(r"earnings|financial results|quarterly results|webcast|conference call|financial call|results|investor", re.I)
+CALL_WORDS = re.compile(
+    r"conference call|earnings call|financial call|analyst call|post earnings|webcast|webinar|Q&A|question and answer|"
+    r"discuss (?:the )?(?:financial )?results|live video|livestream",
+    re.I,
+)
+RELEASE_WORDS = re.compile(
+    r"earnings date|earnings announcement|earnings release|financial results|quarterly results|"
+    r"report(?:s|ed|ing)?[^.]{0,100}(?:results|earnings)|release(?:s|d|ing)?[^.]{0,100}(?:results|earnings)|"
+    r"announce(?:s|d|ing)?[^.]{0,100}(?:results|earnings)|post(?:s|ed|ing)?[^.]{0,100}(?:results|earnings)",
+    re.I,
+)
+LINK_WORDS = re.compile(
+    r"earnings|financial|quarter|results|webcast|conference|call|investor|press|release|production|deliver|event|presentation",
+    re.I,
+)
+AFTER_CLOSE = re.compile(r"after (?:the )?(?:u\.?s\.? )?(?:financial )?markets? close|after market close|after the close", re.I)
+BEFORE_OPEN = re.compile(r"before (?:the )?(?:u\.?s\.? )?(?:financial )?markets? open|before market open|before the open", re.I)
 
 
-def stable_uid(ticker: str, kind: str, day: date, when: datetime | None = None) -> str:
-    raw = f"IR-TIMES|{ticker}|{kind}|{day.isoformat()}|{when.isoformat() if when else ''}"
+def stable_uid(ticker: str, kind: str, period: str) -> str:
+    raw = f"IR-TIMES|{ticker}|{kind}|{period}"
     return hashlib.sha256(raw.encode()).hexdigest()[:24] + "@stock-calendar"
 
 
@@ -71,123 +122,178 @@ def zone_for(label: str) -> ZoneInfo:
     label = label.lower()
     if label.startswith(("ct", "cst", "cdt", "central")):
         return CT
+    if label.startswith(("mt", "mst", "mdt", "mountain")):
+        return MT
     if label.startswith(("pt", "pst", "pdt", "pacific")):
         return PT
-    return NY
+    return ET
 
 
 def parse_times(text: str, day: date) -> list[tuple[datetime, str]]:
-    out = []
+    out: list[tuple[datetime, str]] = []
     for m in TIME_RE.finditer(text):
         try:
             t = date_parser.parse(m.group(1)).time().replace(tzinfo=None)
-            z = zone_for(m.group(2))
-            out.append((datetime.combine(day, t, z), m.group(0)))
+            out.append((datetime.combine(day, t, zone_for(m.group(2))), m.group(0)))
         except (ValueError, OverflowError):
             continue
     return out
 
 
-def add_timed(cal: Calendar, ticker: str, kind: str, day: date, when: datetime, source_url: str, source_text: str) -> None:
+def period_key(text: str, day: date) -> str:
+    q = re.search(r"\bQ([1-4])\s*(20\d{2})\b|\b(20\d{2})\s*Q([1-4])\b", text, re.I)
+    if q:
+        if q.group(1):
+            return f"{q.group(2)}-Q{q.group(1)}"
+        return f"{q.group(3)}-Q{q.group(4)}"
+    named = re.search(r"\b(first|second|third|fourth)\s+quarter(?:\s+(?:fiscal\s+)?)?(20\d{2})", text, re.I)
+    if named:
+        num = {"first": 1, "second": 2, "third": 3, "fourth": 4}[named.group(1).lower()]
+        return f"{named.group(2)}-Q{num}"
+    # 找不到季度标签时，用日期作为后备身份；后续抓到季度标签后会自动采用更稳定的 UID。
+    return day.isoformat()
+
+
+def add_timed(events: list[Event], ticker: str, kind: str, day: date, when: datetime,
+              source_url: str, source_text: str, period: str) -> None:
+    local = when.astimezone(ET)
     ev = Event()
-    ev.add("uid", stable_uid(ticker, kind, day, when))
-    ev.add("dtstamp", datetime.now(BJ))
-    ev.add("dtstart", when.astimezone(BJ))
-    ev.add("dtend", when.astimezone(BJ) + timedelta(minutes=45 if kind == "电话会议" else 15))
-    title = f"{ticker} 电话会议" if kind == "电话会议" else f"{ticker} 财报发布"
-    ev.add("summary", title)
-    ev.add("description", f"北京时间：{when.astimezone(BJ):%Y-%m-%d %H:%M}\n官方来源：{ticker} 投资者关系官网\n官方网址：{source_url}\n原文摘要：{source_text[:500]}")
+    ev.add("uid", stable_uid(ticker, kind, period))
+    ev.add("dtstamp", datetime.now(ET))
+    ev.add("dtstart", local)
+    ev.add("dtend", local + timedelta(minutes=60 if kind == "电话会议" else 15))
+    ev.add("summary", f"{ticker} {kind}")
+    ev.add("description", f"美东时间：{local:%Y-%m-%d %H:%M}\n官方来源：{ticker} 投资者关系官网\n官方网址：{source_url}\n原文摘要：{source_text[:500]}")
     ev.add("x-source", f"IR-TIMES-{ticker}")
-    cal.add_component(ev)
+    events.append(ev)
 
 
-def add_date_only(cal: Calendar, ticker: str, kind: str, day: date, source_url: str, note: str) -> None:
+def add_date_only(events: list[Event], ticker: str, day: date, source_url: str, note: str,
+                  source_text: str, period: str) -> None:
     ev = Event()
-    ev.add("uid", stable_uid(ticker, kind, day))
-    ev.add("dtstamp", datetime.now(BJ))
+    ev.add("uid", stable_uid(ticker, "财报发布", period))
+    ev.add("dtstamp", datetime.now(ET))
     ev.add("dtstart", day)
     ev.add("dtend", day + timedelta(days=1))
     ev.add("summary", f"{ticker} 财报发布（{note}）")
-    ev.add("description", f"官方仅公布了日期/时段，未公布精确发布时间。\n官方来源：{ticker} 投资者关系官网\n官方网址：{source_url}")
+    ev.add("description", f"官方已确认财报日期/时段，但未公布精确发布时间。\n官方来源：{ticker} 投资者关系官网\n官方网址：{source_url}\n原文摘要：{source_text[:500]}")
     ev.add("x-source", f"IR-TIMES-{ticker}")
-    cal.add_component(ev)
+    events.append(ev)
 
 
 def candidate_pages(base_url: str) -> list[str]:
-    soup = BeautifulSoup(get(base_url).text, "html.parser")
+    try:
+        soup = BeautifulSoup(get(base_url).text, "html.parser")
+    except Exception:
+        return [base_url]
     urls = [base_url]
     host = urlparse(base_url).netloc
     for a in soup.find_all("a", href=True):
-        label = a.get_text(" ", strip=True)
         href = urljoin(base_url, a["href"])
-        if urlparse(href).netloc != host:
+        label = a.get_text(" ", strip=True)
+        # 允许同一公司 IR 主域及其子域；拒绝明显外站。
+        href_host = urlparse(href).netloc
+        if not (href_host == host or href_host.endswith("." + host) or host.endswith("." + href_host)):
             continue
-        if EARNINGS_LINK_WORDS.search(label) or EARNINGS_LINK_WORDS.search(href):
+        if LINK_WORDS.search(label + " " + href):
             urls.append(href)
-        if len(urls) >= 30:
+        if len(urls) >= 80:
             break
     return list(dict.fromkeys(urls))
 
 
-def process_ticker(cal: Calendar, ticker: str, base_url: str) -> None:
-    seen: set[tuple[str, date, str]] = set()
-    for url in candidate_pages(base_url):
+def page_text(url: str) -> str:
+    soup = BeautifulSoup(get(url).text, "html.parser")
+    # script[type=application/ld+json] 也保留，部分 IR 站点把事件信息放在结构化数据中。
+    chunks = [soup.get_text(" ", strip=True)]
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        if script.string:
+            chunks.append(script.string)
+    return re.sub(r"\s+", " ", " ".join(chunks))
+
+
+def parse_page(ticker: str, url: str) -> list[Event]:
+    text = page_text(url)
+    if not (RELEASE_WORDS.search(text) or CALL_WORDS.search(text)):
+        return []
+
+    matches = []
+    for p in DATE_PATTERNS:
+        matches.extend(list(p.finditer(text)))
+
+    result: list[Event] = []
+    seen: set[tuple[str, str]] = set()
+    for dm in matches:
         try:
-            soup = BeautifulSoup(get(url).text, "html.parser")
-        except Exception:
+            day = date_parser.parse(dm.group()).date()
+        except (ValueError, OverflowError):
             continue
-        text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
-        if not (RELEASE_WORDS.search(text) or CALL_WORDS.search(text)):
+        if not (TODAY - timedelta(days=21) <= day <= HORIZON):
             continue
 
-        matches = []
-        for p in DATE_PATTERNS:
-            matches.extend(list(p.finditer(text)))
-        for dm in matches:
+        window = text[max(0, dm.start() - 600): min(len(text), dm.end() + 1500)]
+        if not (RELEASE_WORDS.search(window) or CALL_WORDS.search(window)):
+            continue
+        period = period_key(window, day)
+        times = parse_times(window, day)
+
+        # 电话会议：选择靠近 call/webcast/Q&A 语句的时间；同一季度只保留一条主电话会议。
+        if CALL_WORDS.search(window) and times:
+            call_when = times[0][0]
+            for when, raw in times:
+                pos = window.lower().find(raw.lower())
+                around = window[max(0, pos - 260): pos + 320] if pos >= 0 else window
+                if CALL_WORDS.search(around):
+                    call_when = when
+                    break
+            key = (period, "电话会议")
+            if key not in seen:
+                seen.add(key)
+                add_timed(result, ticker, "电话会议", day, call_when, url, window, period)
+
+        # 财报发布：优先识别盘前/盘后。只有时间明确绑定“results/earnings release”时才写精确时刻。
+        if RELEASE_WORDS.search(window):
+            key = (period, "财报发布")
+            if key in seen:
+                continue
+            if AFTER_CLOSE.search(window):
+                seen.add(key)
+                add_date_only(result, ticker, day, url, "盘后", window, period)
+                continue
+            if BEFORE_OPEN.search(window):
+                seen.add(key)
+                add_date_only(result, ticker, day, url, "盘前", window, period)
+                continue
+
+            release_when: datetime | None = None
+            for when, raw in times:
+                pos = window.lower().find(raw.lower())
+                around = window[max(0, pos - 280): pos + 300] if pos >= 0 else window[:600]
+                if RELEASE_WORDS.search(around) and not CALL_WORDS.search(around):
+                    release_when = when
+                    break
+            seen.add(key)
+            if release_when:
+                add_timed(result, ticker, "财报发布", day, release_when, url, window, period)
+            else:
+                add_date_only(result, ticker, day, url, "具体时间未公布", window, period)
+    return result
+
+
+def process_ticker(ticker: str, bases: list[str]) -> list[Event]:
+    all_events: dict[str, Event] = {}
+    visited: set[str] = set()
+    for base in bases:
+        for url in candidate_pages(base):
+            if url in visited:
+                continue
+            visited.add(url)
             try:
-                day = date_parser.parse(dm.group()).date()
-            except (ValueError, OverflowError):
+                for ev in parse_page(ticker, url):
+                    all_events[str(ev.get("uid"))] = ev
+            except Exception:
                 continue
-            if not (TODAY - timedelta(days=14) <= day <= HORIZON):
-                continue
-            start = max(0, dm.start() - 320)
-            end = min(len(text), dm.end() + 900)
-            window = text[start:end]
-            if not (RELEASE_WORDS.search(window) or CALL_WORDS.search(window)):
-                continue
-            times = parse_times(window, day)
-
-            if CALL_WORDS.search(window):
-                for when, _raw in times:
-                    key = ("电话会议", day, when.isoformat())
-                    if key not in seen:
-                        seen.add(key)
-                        add_timed(cal, ticker, "电话会议", day, when, url, window)
-                        break
-
-            if RELEASE_WORDS.search(window):
-                release_added = False
-                for when, raw in times:
-                    pos = window.lower().find(raw.lower())
-                    around = window[max(0, pos - 180):pos + 240] if pos >= 0 else window[:420]
-                    if RELEASE_WORDS.search(around) and not CALL_WORDS.search(around[:220]):
-                        key = ("发布时间", day, when.isoformat())
-                        if key not in seen:
-                            seen.add(key)
-                            add_timed(cal, ticker, "发布时间", day, when, url, window)
-                        release_added = True
-                        break
-                if not release_added:
-                    if re.search(r"after (?:the )?(?:u\.?s\.? )?(?:financial )?markets? close|after market close", window, re.I):
-                        key = ("盘后", day, "")
-                        if key not in seen:
-                            seen.add(key)
-                            add_date_only(cal, ticker, "发布时间", day, url, "盘后，具体时间未公布")
-                    elif re.search(r"before (?:the )?(?:u\.?s\.? )?(?:financial )?markets? open|before market open", window, re.I):
-                        key = ("盘前", day, "")
-                        if key not in seen:
-                            seen.add(key)
-                            add_date_only(cal, ticker, "发布时间", day, url, "盘前，具体时间未公布")
+    return list(all_events.values())
 
 
 def main() -> None:
@@ -195,18 +301,30 @@ def main() -> None:
         raise SystemExit("stocks.ics 不存在")
     cal = Calendar.from_ical(OUTPUT.read_bytes())
 
-    kept = []
+    old_by_ticker: dict[str, list[Event]] = {ticker: [] for ticker in IR_PAGES}
+    base_components = []
     for c in list(cal.subcomponents):
-        if getattr(c, "name", "") == "VEVENT" and str(c.get("x-source", "")).startswith("IR-TIMES-"):
+        if getattr(c, "name", "") != "VEVENT":
+            base_components.append(c)
             continue
-        kept.append(c)
-    cal.subcomponents = kept
+        source = str(c.get("x-source", ""))
+        if source.startswith("IR-TIMES-"):
+            ticker = source.removeprefix("IR-TIMES-")
+            if ticker in old_by_ticker:
+                old_by_ticker[ticker].append(c)
+                continue
+        base_components.append(c)
 
-    for ticker, url in IR_PAGES.items():
+    cal.subcomponents = base_components
+
+    for ticker, bases in IR_PAGES.items():
         try:
-            process_ticker(cal, ticker, url)
+            fresh = process_ticker(ticker, bases)
         except Exception:
-            continue
+            fresh = []
+        # 某家公司本轮没有抓到有效财报信息时，不清掉上一轮已确认事件。
+        for ev in (fresh if fresh else old_by_ticker.get(ticker, [])):
+            cal.add_component(ev)
 
     OUTPUT.write_bytes(cal.to_ical())
 
