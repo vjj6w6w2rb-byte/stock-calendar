@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -30,7 +31,7 @@ HORIZON = TODAY + timedelta(days=550)
 TIMEOUT = 25
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "text/html,*/*"}
 
-# 每只股票都配置多个官方入口，避免单一页面改版后整只股票失效。
+# 只包含当前公开上市、需要自动跟踪财报的股票。
 IR_PAGES: dict[str, list[str]] = {
     "CRCL": [
         "https://investor.circle.com/",
@@ -73,13 +74,16 @@ IR_PAGES: dict[str, list[str]] = {
         "https://investor.oracle.com/",
         "https://investor.oracle.com/investor-news/default.aspx",
     ],
-    "SPCX": [
-        "https://ir.spacex.com/",
-    ],
 }
 
+# 同时支持 October 21, 2026 和 Oct 21, 2026。Tesla IR 首页使用缩写月份。
 DATE_PATTERNS = [
-    re.compile(r"(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+20\d{2}", re.I),
+    re.compile(
+        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+\d{1,2},?\s+20\d{2}",
+        re.I,
+    ),
     re.compile(r"\b\d{1,2}/\d{1,2}/20\d{2}\b"),
     re.compile(r"\b20\d{2}-\d{2}-\d{2}\b"),
 ]
@@ -150,7 +154,6 @@ def period_key(text: str, day: date) -> str:
     if named:
         num = {"first": 1, "second": 2, "third": 3, "fourth": 4}[named.group(1).lower()]
         return f"{named.group(2)}-Q{num}"
-    # 找不到季度标签时，用日期作为后备身份；后续抓到季度标签后会自动采用更稳定的 UID。
     return day.isoformat()
 
 
@@ -191,20 +194,18 @@ def candidate_pages(base_url: str) -> list[str]:
     for a in soup.find_all("a", href=True):
         href = urljoin(base_url, a["href"])
         label = a.get_text(" ", strip=True)
-        # 允许同一公司 IR 主域及其子域；拒绝明显外站。
         href_host = urlparse(href).netloc
         if not (href_host == host or href_host.endswith("." + host) or host.endswith("." + href_host)):
             continue
         if LINK_WORDS.search(label + " " + href):
             urls.append(href)
-        if len(urls) >= 80:
+        if len(urls) >= 60:
             break
     return list(dict.fromkeys(urls))
 
 
 def page_text(url: str) -> str:
     soup = BeautifulSoup(get(url).text, "html.parser")
-    # script[type=application/ld+json] 也保留，部分 IR 站点把事件信息放在结构化数据中。
     chunks = [soup.get_text(" ", strip=True)]
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
         if script.string:
@@ -237,7 +238,6 @@ def parse_page(ticker: str, url: str) -> list[Event]:
         period = period_key(window, day)
         times = parse_times(window, day)
 
-        # 电话会议：选择靠近 call/webcast/Q&A 语句的时间；同一季度只保留一条主电话会议。
         if CALL_WORDS.search(window) and times:
             call_when = times[0][0]
             for when, raw in times:
@@ -251,7 +251,6 @@ def parse_page(ticker: str, url: str) -> list[Event]:
                 seen.add(key)
                 add_timed(result, ticker, "电话会议", day, call_when, url, window, period)
 
-        # 财报发布：优先识别盘前/盘后。只有时间明确绑定“results/earnings release”时才写精确时刻。
         if RELEASE_WORDS.search(window):
             key = (period, "财报发布")
             if key in seen:
@@ -291,12 +290,13 @@ def process_ticker(ticker: str, bases: list[str]) -> list[Event]:
             try:
                 for ev in parse_page(ticker, url):
                     all_events[str(ev.get("uid"))] = ev
-            except Exception:
-                continue
+            except Exception as exc:
+                logging.debug("%s 页面失败 %s: %s", ticker, url, exc)
     return list(all_events.values())
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if not OUTPUT.exists():
         raise SystemExit("stocks.ics 不存在")
     cal = Calendar.from_ical(OUTPUT.read_bytes())
@@ -317,16 +317,21 @@ def main() -> None:
 
     cal.subcomponents = base_components
 
+    total = 0
     for ticker, bases in IR_PAGES.items():
         try:
             fresh = process_ticker(ticker, bases)
-        except Exception:
+        except Exception as exc:
+            logging.warning("%s 财报抓取失败：%s", ticker, exc)
             fresh = []
-        # 某家公司本轮没有抓到有效财报信息时，不清掉上一轮已确认事件。
-        for ev in (fresh if fresh else old_by_ticker.get(ticker, [])):
+        chosen = fresh if fresh else old_by_ticker.get(ticker, [])
+        for ev in chosen:
             cal.add_component(ev)
+        total += len(chosen)
+        logging.info("%s 财报事件：%d", ticker, len(chosen))
 
     OUTPUT.write_bytes(cal.to_ical())
+    logging.info("财报增强完成，共 %d 个事件", total)
 
 
 if __name__ == "__main__":
