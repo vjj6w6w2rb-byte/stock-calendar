@@ -44,6 +44,7 @@ IR_PAGES: dict[str, list[str]] = {
     ],
     "TSLA": [
         "https://ir.tesla.com/",
+        "https://ir.tesla.com/press",
     ],
     "POET": [
         "https://investors.poet-technologies.com/",
@@ -76,7 +77,6 @@ IR_PAGES: dict[str, list[str]] = {
     ],
 }
 
-# 同时支持 October 21, 2026 和 Oct 21, 2026。Tesla IR 首页使用缩写月份。
 DATE_PATTERNS = [
     re.compile(
         r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
@@ -99,8 +99,9 @@ CALL_WORDS = re.compile(
 )
 RELEASE_WORDS = re.compile(
     r"earnings date|earnings announcement|earnings release|financial results|quarterly results|"
-    r"report(?:s|ed|ing)?[^.]{0,100}(?:results|earnings)|release(?:s|d|ing)?[^.]{0,100}(?:results|earnings)|"
-    r"announce(?:s|d|ing)?[^.]{0,100}(?:results|earnings)|post(?:s|ed|ing)?[^.]{0,100}(?:results|earnings)",
+    r"post its financial results|financial performance|"
+    r"report(?:s|ed|ing)?[^.]{0,140}(?:results|earnings)|release(?:s|d|ing)?[^.]{0,140}(?:results|earnings)|"
+    r"announce(?:s|d|ing)?[^.]{0,140}(?:results|earnings)|post(?:s|ed|ing)?[^.]{0,140}(?:results|earnings)",
     re.I,
 )
 LINK_WORDS = re.compile(
@@ -150,7 +151,7 @@ def period_key(text: str, day: date) -> str:
         if q.group(1):
             return f"{q.group(2)}-Q{q.group(1)}"
         return f"{q.group(3)}-Q{q.group(4)}"
-    named = re.search(r"\b(first|second|third|fourth)\s+quarter(?:\s+(?:fiscal\s+)?)?(20\d{2})", text, re.I)
+    named = re.search(r"\b(first|second|third|fourth)\s+quarter(?:\s+(?:fiscal\s+)?)?(?:of\s+)?(20\d{2})", text, re.I)
     if named:
         num = {"first": 1, "second": 2, "third": 3, "fourth": 4}[named.group(1).lower()]
         return f"{named.group(2)}-Q{num}"
@@ -232,7 +233,7 @@ def parse_page(ticker: str, url: str) -> list[Event]:
         if not (TODAY - timedelta(days=21) <= day <= HORIZON):
             continue
 
-        window = text[max(0, dm.start() - 600): min(len(text), dm.end() + 1500)]
+        window = text[max(0, dm.start() - 700): min(len(text), dm.end() + 1800)]
         if not (RELEASE_WORDS.search(window) or CALL_WORDS.search(window)):
             continue
         period = period_key(window, day)
@@ -242,7 +243,7 @@ def parse_page(ticker: str, url: str) -> list[Event]:
             call_when = times[0][0]
             for when, raw in times:
                 pos = window.lower().find(raw.lower())
-                around = window[max(0, pos - 260): pos + 320] if pos >= 0 else window
+                around = window[max(0, pos - 320): pos + 380] if pos >= 0 else window
                 if CALL_WORDS.search(around):
                     call_when = when
                     break
@@ -267,7 +268,7 @@ def parse_page(ticker: str, url: str) -> list[Event]:
             release_when: datetime | None = None
             for when, raw in times:
                 pos = window.lower().find(raw.lower())
-                around = window[max(0, pos - 280): pos + 300] if pos >= 0 else window[:600]
+                around = window[max(0, pos - 320): pos + 360] if pos >= 0 else window[:700]
                 if RELEASE_WORDS.search(around) and not CALL_WORDS.search(around):
                     release_when = when
                     break
