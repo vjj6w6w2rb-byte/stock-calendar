@@ -10,6 +10,7 @@ on:
     paths:
       - "generate_calendar.py"
       - "enhance_earnings.py"
+      - "add_confirmed_earnings.py"
       - "enhance_catalysts.py"
       - "enhance_options.py"
       - "add_us_midterm.py"
@@ -36,6 +37,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python generate_calendar.py
       - run: python enhance_earnings.py
+      - run: python add_confirmed_earnings.py
       - run: python enhance_catalysts.py
       - run: python enhance_options.py
       - run: python add_us_midterm.py
@@ -49,5 +51,6 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add stocks.ics
             git commit -m "chore: update stock calendar"
+            git pull --rebase origin main
             git push
           fi
