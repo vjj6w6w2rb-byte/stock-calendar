@@ -1,6 +1,5 @@
 import unittest
 from datetime import date, datetime, timezone
-from zoneinfo import ZoneInfo
 
 from eastern_calendar import calendar_text
 
@@ -9,17 +8,17 @@ class EasternCalendarTests(unittest.TestCase):
     def setUp(self):
         self.text = calendar_text(date(2026, 3, 6), datetime(2026, 1, 1, tzinfo=timezone.utc))
 
-    def test_weekdays_have_exactly_two_events(self):
+    def test_weekdays_have_four_events(self):
         for day in ("20260306", "20260309", "20260310"):
-            self.assertEqual(self.text.count(f"DTSTART;TZID=America/New_York:{day}"), 2)
+            self.assertEqual(self.text.count(f"DTSTART;TZID=America/New_York:{day}"), 4)
         self.assertNotIn("DTSTART;TZID=America/New_York:20260307", self.text)
         self.assertNotIn("DTSTART;TZID=America/New_York:20260308", self.text)
 
     def test_titles_and_local_times(self):
-        self.assertIn("SUMMARY:美东 2026年3月9日 凌晨零点", self.text)
-        self.assertIn("SUMMARY:美东 2026年3月9日 上午九时", self.text)
-        self.assertIn("DTSTART;TZID=America/New_York:20260309T000000", self.text)
-        self.assertIn("DTSTART;TZID=America/New_York:20260309T090000", self.text)
+        for hour, title in (("000000", "00:00"), ("040000", "盘前开盘"), ("090000", "开盘"), ("180000", "夜盘开盘")):
+            self.assertIn(f"SUMMARY:美东 3月9日 {title}", self.text)
+            self.assertIn(f"DTSTART;TZID=America/New_York:20260309T{hour}", self.text)
+        self.assertIn("DTEND;TZID=America/New_York:20260309T040100", self.text)
 
     def test_dst_and_uid_stability(self):
         a = calendar_text(date(2026, 10, 30), datetime(2026, 1, 1, tzinfo=timezone.utc))
