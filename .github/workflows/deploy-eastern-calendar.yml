@@ -1,0 +1,38 @@
+name: Deploy Eastern Time Calendar
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Test calendar generator
+        run: python3 -m unittest -v test_eastern_calendar.py
+      - name: Generate subscription calendar
+        run: python3 eastern_calendar.py
+      - name: Add Pages MIME metadata
+        run: |
+          touch public/.nojekyll
+          printf 'text/calendar ics\n' > public/.mime.types
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v4
