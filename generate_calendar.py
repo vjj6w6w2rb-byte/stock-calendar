@@ -41,11 +41,11 @@ COMPANY_EVENT_PAGES = {
 }
 
 MACRO_KEYWORDS = {
-    "consumer price index": ("🔴【CPI】美国 CPI / Core CPI", "消费者价格指数及核心消费者价格指数"),
-    "producer price index": ("🔴【PPI】美国 PPI / Core PPI", "生产者价格指数及核心生产者价格指数"),
-    "employment situation": ("🟠【NFP】美国非农就业 / 失业率", "非农就业、失业率等就业数据"),
+    "consumer price index": ("美国 CPI / Core CPI", "消费者价格指数及核心消费者价格指数"),
+    "producer price index": ("美国 PPI / Core PPI", "生产者价格指数及核心生产者价格指数"),
+    "employment situation": ("美国非农就业 / 失业率", "非农就业、失业率等就业数据"),
     "employment cost index": ("美国就业成本指数", "就业成本指数"),
-    "personal income and outlays": ("🔴【PCE】美国 PCE / Core PCE", "个人消费支出物价指数及核心个人消费支出物价指数"),
+    "personal income and outlays": ("美国 PCE / Core PCE", "个人消费支出物价指数及核心个人消费支出物价指数"),
     "gross domestic product": ("美国国内生产总值", "国内生产总值"),
     "gdp (": ("美国国内生产总值", "国内生产总值"),
     "advance estimate": ("美国国内生产总值", "国内生产总值"),
@@ -130,14 +130,14 @@ def parse_bls_with_fallback() -> list[Event]:
     # BLS's published 2026 release schedule. All listed releases are 08:30 ET.
     # This keeps the calendar useful when BLS's Akamai rules block GitHub Actions.
     releases = (
-        (date(2026, 10, 14), "🔴【CPI】美国 CPI / Core CPI", "CPI / Core CPI"),
-        (date(2026, 10, 15), "🔴【PPI】美国 PPI / Core PPI", "PPI / Core PPI"),
-        (date(2026, 11, 6), "🟠【NFP】美国非农就业 / 失业率", "Nonfarm Payrolls / Unemployment Rate"),
-        (date(2026, 11, 10), "🔴【CPI】美国 CPI / Core CPI", "CPI / Core CPI"),
-        (date(2026, 11, 13), "🔴【PPI】美国 PPI / Core PPI", "PPI / Core PPI"),
-        (date(2026, 12, 4), "🟠【NFP】美国非农就业 / 失业率", "Nonfarm Payrolls / Unemployment Rate"),
-        (date(2026, 12, 10), "🔴【CPI】美国 CPI / Core CPI", "CPI / Core CPI"),
-        (date(2026, 12, 15), "🔴【PPI】美国 PPI / Core PPI", "PPI / Core PPI"),
+        (date(2026, 10, 14), "美国 CPI / Core CPI", "CPI / Core CPI"),
+        (date(2026, 10, 15), "美国 PPI / Core PPI", "PPI / Core PPI"),
+        (date(2026, 11, 6), "美国非农就业 / 失业率", "Nonfarm Payrolls / Unemployment Rate"),
+        (date(2026, 11, 10), "美国 CPI / Core CPI", "CPI / Core CPI"),
+        (date(2026, 11, 13), "美国 PPI / Core PPI", "PPI / Core PPI"),
+        (date(2026, 12, 4), "美国非农就业 / 失业率", "Nonfarm Payrolls / Unemployment Rate"),
+        (date(2026, 12, 10), "美国 CPI / Core CPI", "CPI / Core CPI"),
+        (date(2026, 12, 15), "美国 PPI / Core PPI", "PPI / Core PPI"),
     )
     result: list[Event] = []
     for day, title, label in releases:
