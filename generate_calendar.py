@@ -320,6 +320,8 @@ def source_group(item: Event) -> str:
     source = str(item.get("x-source", ""))
     if source.startswith("NASDAQ-"):
         return "OPTIONS"
+    if source.startswith("BLS-SCHEDULE-"):
+        return "BLS"
     if source.startswith("IR-"):
         return "COMPANY"
     return source
