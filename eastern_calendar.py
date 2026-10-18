@@ -10,6 +10,12 @@ NY = ZoneInfo("America/New_York")
 OUTPUT = Path("public/eastern-time.ics")
 PAST_DAYS = 30
 FUTURE_DAYS = 400
+EVENTS = (
+    (0, "00:00"),
+    (4, "盘前开盘"),
+    (9, "开盘"),
+    (18, "夜盘开盘"),
+)
 
 
 def fold(line: str) -> str:
@@ -24,13 +30,14 @@ def fold(line: str) -> str:
         else:
             current += encoded
     chunks.append(current)
-    return "\r\n".join(chunk.decode("utf-8") for chunk in chunks)
+    return "
+".join(chunk.decode("utf-8") for chunk in chunks)
 
 
-def lines_for_event(day: date, hour: int, stamp: datetime) -> list[str]:
+def lines_for_event(day: date, hour: int, label: str, stamp: datetime) -> list[str]:
     local = datetime.combine(day, time(hour), NY)
-    end = local + timedelta(minutes=30)
-    summary = f"美东 {day.year}年{day.month}月{day.day}日 {'凌晨0点' if hour == 0 else '上午9时'}"
+    end = local + timedelta(minutes=1)
+    summary = f"美东 {day.month}月{day.day}日 {label}"
     identity = f"eastern-{day.isoformat()}-{hour:02d}@eastern-time-calendar"
     return [
         "BEGIN:VEVENT",
@@ -63,10 +70,12 @@ def calendar_text(today: date | None = None, stamp: datetime | None = None) -> s
     for offset in range(-PAST_DAYS, FUTURE_DAYS + 1):
         day = today + timedelta(days=offset)
         if day.weekday() < 5:
-            lines.extend(lines_for_event(day, 0, stamp))
-            lines.extend(lines_for_event(day, 9, stamp))
+            for hour, label in EVENTS:
+                lines.extend(lines_for_event(day, hour, label, stamp))
     lines.append("END:VCALENDAR")
-    return "\r\n".join(fold(line) for line in lines) + "\r\n"
+    return "
+".join(fold(line) for line in lines) + "
+"
 
 
 def main() -> None:
