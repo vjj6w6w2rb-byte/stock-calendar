@@ -306,7 +306,9 @@ def main() -> None:
             logging.info("%s 成功：%d 个事件", name, len(events))
         except Exception as exc:
             logging.warning("%s 失败，保留上一次事件：%s", name, exc)
-    # Option-expiration events are intentionally excluded, including any carried\n    # over from a previous generated file.\n    retained = [item for item in previous if source_group(item) != "OPTIONS" and source_group(item) not in successful]
+    # Option-expiration events are intentionally excluded, including any carried
+    # over from a previous generated file.
+    retained = [item for item in previous if source_group(item) != "OPTIONS" and source_group(item) not in successful]
     all_events = {str(e.get("uid")): e for e in retained + fresh}
 
     calendar = Calendar()
