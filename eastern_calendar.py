@@ -30,8 +30,7 @@ def fold(line: str) -> str:
         else:
             current += encoded
     chunks.append(current)
-    return "
-".join(chunk.decode("utf-8") for chunk in chunks)
+    return "\r\n".join(chunk.decode("utf-8") for chunk in chunks)
 
 
 def lines_for_event(day: date, hour: int, label: str, stamp: datetime) -> list[str]:
@@ -73,9 +72,7 @@ def calendar_text(today: date | None = None, stamp: datetime | None = None) -> s
             for hour, label in EVENTS:
                 lines.extend(lines_for_event(day, hour, label, stamp))
     lines.append("END:VCALENDAR")
-    return "
-".join(fold(line) for line in lines) + "
-"
+    return "\r\n".join(fold(line) for line in lines) + "\r\n"
 
 
 def main() -> None:
