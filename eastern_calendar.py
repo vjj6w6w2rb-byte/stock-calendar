@@ -30,7 +30,7 @@ def fold(line: str) -> str:
 def lines_for_event(day: date, hour: int, stamp: datetime) -> list[str]:
     local = datetime.combine(day, time(hour), NY)
     end = local + timedelta(minutes=30)
-    summary = f"美东 {day.year}年{day.month}月{day.day}日 {'凌晨零点' if hour == 0 else '上午九时'}"
+    summary = f"美东 {day.year}年{day.month}月{day.day}日 {'凌晨0点' if hour == 0 else '上午9时'}"
     identity = f"eastern-{day.isoformat()}-{hour:02d}@eastern-time-calendar"
     return [
         "BEGIN:VEVENT",
