@@ -12,7 +12,6 @@ on:
       - "enhance_earnings.py"
       - "add_confirmed_earnings.py"
       - "enhance_catalysts.py"
-      - "enhance_options.py"
       - "add_us_midterm.py"
       - "convert_to_et.py"
       - "requirements.txt"
@@ -39,7 +38,6 @@ jobs:
       - run: python enhance_earnings.py
       - run: python add_confirmed_earnings.py
       - run: python enhance_catalysts.py
-      - run: python enhance_options.py
       - run: python add_us_midterm.py
       - run: python convert_to_et.py
       - name: 提交更新后的日历
