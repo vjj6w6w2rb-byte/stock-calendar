@@ -25,7 +25,6 @@ NY = ZoneInfo("America/New_York")
 BJ = ZoneInfo("Asia/Shanghai")
 TODAY = datetime.now(BJ).date()
 HORIZON = TODAY + timedelta(days=550)
-OPTION_HORIZON = TODAY + timedelta(days=60)
 TIMEOUT = 25
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -186,32 +185,6 @@ def parse_fomc() -> list[Event]:
     return result
 
 
-def parse_options() -> list[Event]:
-    result: list[Event] = []
-    for ticker in TICKERS:
-        source = f"NASDAQ-{ticker}"
-        url = (f"https://api.nasdaq.com/api/quote/{ticker}/option-chain?assetclass=stocks"
-               f"&fromdate={TODAY.isoformat()}&todate={OPTION_HORIZON.isoformat()}")
-        payload = get(url).json()
-        data = payload.get("data") or {}
-        expirations = data.get("expirationDates") or [
-            row.get("expirygroup") for row in ((data.get("table") or {}).get("rows") or []) if row.get("expirygroup")
-        ]
-        for value in sorted(set(expirations)):
-            value = str(value)
-            try:
-                expiry = date_parser.parse(value).date()
-            except (ValueError, OverflowError):
-                continue
-            if not (TODAY <= expiry <= OPTION_HORIZON):
-                continue
-            monthly = "monthly" in value.lower() or (expiry.weekday() == 4 and 15 <= expiry.day <= 21)
-            kind = "月度期权到期日" if monthly else "周度期权到期日"
-            page = f"https://www.nasdaq.com/market-activity/stocks/{ticker.lower()}/option-chain"
-            result.append(allday_event(source, expiry.isoformat(), f"{ticker} {kind}", expiry,
-                                       f"{ticker} 实际已挂牌期权到期日\n官方来源：Nasdaq 期权链\n官方网址：{page}"))
-    return result
-
 
 def parse_company_events() -> list[Event]:
     result: list[Event] = []
@@ -296,7 +269,6 @@ FETCHERS: dict[str, Callable[[], list[Event]]] = {
     "BEA": lambda: parse_schedule_rows("https://www.bea.gov/news/schedule", "BEA"),
     "CENSUS": lambda: parse_schedule_rows("https://www.census.gov/economic-indicators/calendar-listview.html", "Census"),
     "FED": parse_fomc,
-    "OPTIONS": parse_options,
     "COMPANY": parse_company_events,
     "MARKET-HOLIDAY": parse_market_holidays,
 }
@@ -334,7 +306,7 @@ def main() -> None:
             logging.info("%s 成功：%d 个事件", name, len(events))
         except Exception as exc:
             logging.warning("%s 失败，保留上一次事件：%s", name, exc)
-    retained = [item for item in previous if source_group(item) not in successful]
+    # Option-expiration events are intentionally excluded, including any carried\n    # over from a previous generated file.\n    retained = [item for item in previous if source_group(item) != "OPTIONS" and source_group(item) not in successful]
     all_events = {str(e.get("uid")): e for e in retained + fresh}
 
     calendar = Calendar()
