@@ -10,12 +10,12 @@ NY = ZoneInfo("America/New_York")
 OUTPUT = Path("public/eastern-time.ics")
 PAST_DAYS = 30
 FUTURE_DAYS = 400
-EVENTS = (
-    (0, "00:00"),
-    (4, "盘前开盘"),
-    (9, "开盘"),
-    (18, "夜盘开盘"),
+DAY_EVENTS = (
+    ("00", 0, 0, "00:00"),
+    ("04", 4, 0, "盘前开盘"),
+    ("09", 9, 30, "开盘"),
 )
+OVERNIGHT_EVENT_ID = "18"  # Preserves the UID of the earlier overnight event.
 
 
 def fold(line: str) -> str:
@@ -33,11 +33,20 @@ def fold(line: str) -> str:
     return "\r\n".join(chunk.decode("utf-8") for chunk in chunks)
 
 
-def lines_for_event(day: date, hour: int, label: str, stamp: datetime) -> list[str]:
-    local = datetime.combine(day, time(hour), NY)
+def lines_for_event(
+    day: date,
+    event_id: str,
+    hour: int,
+    minute: int,
+    label: str,
+    stamp: datetime,
+    summary_day: date | None = None,
+) -> list[str]:
+    local = datetime.combine(day, time(hour, minute), NY)
     end = local + timedelta(minutes=1)
-    summary = f"美东 {day.month}月{day.day}日 {label}"
-    identity = f"eastern-{day.isoformat()}-{hour:02d}@eastern-time-calendar"
+    title_day = summary_day or day
+    summary = f"美东 {title_day.month}月{title_day.day}日 {label}"
+    identity = f"eastern-{day.isoformat()}-{event_id}@eastern-time-calendar"
     return [
         "BEGIN:VEVENT",
         f"UID:{identity}",
@@ -69,8 +78,21 @@ def calendar_text(today: date | None = None, stamp: datetime | None = None) -> s
     for offset in range(-PAST_DAYS, FUTURE_DAYS + 1):
         day = today + timedelta(days=offset)
         if day.weekday() < 5:
-            for hour, label in EVENTS:
-                lines.extend(lines_for_event(day, hour, label, stamp))
+            for event_id, hour, minute, label in DAY_EVENTS:
+                lines.extend(lines_for_event(day, event_id, hour, minute, label, stamp))
+        if day.weekday() < 4 or day.weekday() == 6:  # Sunday through Thursday
+            trade_day = day + timedelta(days=1)
+            lines.extend(
+                lines_for_event(
+                    day,
+                    OVERNIGHT_EVENT_ID,
+                    20,
+                    0,
+                    "夜盘开盘",
+                    stamp,
+                    summary_day=trade_day,
+                )
+            )
     lines.append("END:VCALENDAR")
     return "\r\n".join(fold(line) for line in lines) + "\r\n"
 
