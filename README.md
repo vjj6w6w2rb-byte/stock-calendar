@@ -2,7 +2,14 @@
 
 ## Eastern Time Apple Calendar subscription
 
-The GitHub Pages deployment also publishes a DST-safe, read-only Apple Calendar feed with two events each New York weekday (00:00 and 09:00). Its public URL is:
+The GitHub Pages deployment also publishes a DST-safe, read-only Apple Calendar feed with four events each New York weekday:
+
+- 00:00
+- 04:00 — 盘前开盘
+- 09:00 — 开盘
+- 18:00 — 夜盘开盘
+
+Its public URL is:
 
 `https://vjj6w6w2rb-byte.github.io/stock-calendar/eastern-time.ics`
 
