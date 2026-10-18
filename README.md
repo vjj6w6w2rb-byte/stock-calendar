@@ -1,5 +1,11 @@
 # Stock calendar
 
+## Eastern Time Apple Calendar subscription
+
+The GitHub Pages deployment also publishes a DST-safe, read-only Apple Calendar feed with two events each New York weekday (00:00 and 09:00). Its public URL is:
+
+`https://vjj6w6w2rb-byte.github.io/stock-calendar/eastern-time.ics`
+
 An iPhone-friendly ICS calendar for `CRCL`, `MSTR`, `TSLA`, `POET`, and `OKLO`, plus selected US macro releases, FOMC events, and actual listed options expirations.
 
 ## Subscribe
